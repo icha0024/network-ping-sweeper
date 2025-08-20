@@ -211,51 +211,147 @@ class NetworkPingSweeper:
                     print(f"   • {host}")
             return self.live_hosts
 
+def get_network_range():
+    """Get network range from user with validation and examples"""
+    print("📋 NETWORK RANGE OPTIONS:")
+    print("   1. Single IP:    192.168.1.1")
+    print("   2. CIDR range:   192.168.1.0/24    (scans .1 to .254)")
+    print("   3. IP range:     192.168.1.1-50    (scans .1 to .50)")
+    print("   4. Full subnet:  192.168.0.0/24    (scans 192.168.0.1-254)")
+    print()
+    
+    while True:
+        network_range = input("🌐 Enter network range to scan: ").strip()
+        
+        if not network_range:
+            print("❌ Please enter a network range")
+            continue
+        
+        # Validate the input by trying to parse it
+        sweeper = NetworkPingSweeper()
+        try:
+            ip_list = sweeper.parse_network_range(network_range)
+            
+            # Show what will be scanned
+            if len(ip_list) == 1:
+                print(f"✅ Will scan: {ip_list[0]}")
+            elif len(ip_list) <= 5:
+                print(f"✅ Will scan: {', '.join(ip_list)}")
+            else:
+                print(f"✅ Will scan: {ip_list[0]} through {ip_list[-1]} ({len(ip_list)} hosts)")
+            
+            # Warn for large scans
+            if len(ip_list) > 100:
+                print(f"⚠️  Warning: This will scan {len(ip_list)} hosts. This may take a while.")
+                confirm = input("Continue? (y/n): ").strip().lower()
+                if confirm not in ['y', 'yes']:
+                    continue
+            
+            return network_range
+            
+        except ValueError as e:
+            print(f"❌ Invalid network range: {e}")
+            print("💡 Please try again with a valid format")
+            continue
+
+def get_timeout():
+    """Get timeout setting from user with validation"""
+    print("\n⏱️  TIMEOUT SETTINGS:")
+    print("   • Fast scan:     1 second  (may miss slow devices)")
+    print("   • Balanced:      2 seconds (recommended)")
+    print("   • Thorough:      5 seconds (catches slow devices)")
+    print()
+    
+    while True:
+        timeout_input = input("Enter ping timeout in seconds [2]: ").strip()
+        
+        if not timeout_input:
+            return 2  # Default
+        
+        try:
+            timeout = int(timeout_input)
+            if timeout < 1:
+                print("❌ Timeout must be at least 1 second")
+                continue
+            elif timeout > 10:
+                print("⚠️  Warning: Timeout over 10 seconds may be very slow")
+                confirm = input("Continue with this timeout? (y/n): ").strip().lower()
+                if confirm not in ['y', 'yes']:
+                    continue
+            
+            return timeout
+            
+        except ValueError:
+            print("❌ Please enter a valid number")
+            continue
+
+def get_thread_count():
+    """Get thread count from user with validation"""
+    print("\n🧵 THREAD SETTINGS:")
+    print("   • Conservative:  25 threads  (safe for most systems)")
+    print("   • Balanced:      50 threads  (recommended)")
+    print("   • Aggressive:    100 threads (fast but may overwhelm network)")
+    print()
+    
+    while True:
+        threads_input = input("Enter number of threads [50]: ").strip()
+        
+        if not threads_input:
+            return 50  # Default
+        
+        try:
+            threads = int(threads_input)
+            if threads < 1:
+                print("❌ Thread count must be at least 1")
+                continue
+            elif threads > 200:
+                print("❌ Maximum 200 threads allowed to prevent system overload")
+                continue
+            elif threads > 100:
+                print("⚠️  Warning: High thread count may overwhelm your network or system")
+                confirm = input("Continue with this many threads? (y/n): ").strip().lower()
+                if confirm not in ['y', 'yes']:
+                    continue
+            
+            return threads
+            
+        except ValueError:
+            print("❌ Please enter a valid number")
+            continue
+
 def main():
-    """Main entry point for the ping sweeper"""
-    print("🔍 Network Ping Sweeper v0.4.0")
-    print("⚠️  WARNING: Only use on networks you own or have permission to scan!")
-    print()
+    """Main entry point for the ping sweeper with interactive interface"""
+    print("🔍 Network Ping Sweeper v0.5.0")
+    print("=" * 50)
+    print("⚠️  IMPORTANT: Only use on networks you own or have explicit permission to scan!")
+    print("   Unauthorized network scanning may be illegal in your jurisdiction.")
+    print("=" * 50)
     
-    # Get network range from user
-    print("Examples:")
-    print("  Single IP: 192.168.1.1")
-    print("  CIDR range: 192.168.1.0/24")
-    print("  IP range: 192.168.1.1-50")
-    print()
-    
-    network_range = input("Enter network range to scan: ").strip()
-    
-    if not network_range:
-        print("❌ No network range provided")
-        return
-    
-    # Get timeout setting
     try:
-        timeout_input = input("Ping timeout in seconds [1]: ").strip()
-        timeout = int(timeout_input) if timeout_input else 1
-    except ValueError:
-        timeout = 1
-        print("⚠️  Invalid timeout, using default: 1 second")
-    
-    # Get thread count setting
-    try:
-        threads_input = input("Number of threads [50]: ").strip()
-        threads = int(threads_input) if threads_input else 50
-        if threads > 200:
-            print("⚠️  Warning: Too many threads may overwhelm your system")
-            threads = 200
-        elif threads < 1:
-            threads = 1
-    except ValueError:
-        threads = 50
-        print("⚠️  Invalid thread count, using default: 50")
-    
-    # Create sweeper and run scan
-    sweeper = NetworkPingSweeper(timeout=timeout, max_threads=threads)
-    live_hosts = sweeper.sweep_network(network_range)
-    
-    print(f"\n🏁 Scan finished. Found {len(live_hosts)} live hosts.")
+        # Get all settings from user
+        network_range = get_network_range()
+        timeout = get_timeout()
+        threads = get_thread_count()
+        
+        # Confirm settings before starting
+        print(f"\n📋 SCAN CONFIGURATION:")
+        print(f"   Network: {network_range}")
+        print(f"   Timeout: {timeout} seconds")
+        print(f"   Threads: {threads}")
+        print()
+        
+        input("Press Enter to start scanning... ")
+        
+        # Create sweeper and run scan
+        sweeper = NetworkPingSweeper(timeout=timeout, max_threads=threads)
+        live_hosts = sweeper.sweep_network(network_range)
+        
+        print(f"\n🏁 Scan finished. Found {len(live_hosts)} live hosts.")
+        
+    except KeyboardInterrupt:
+        print(f"\n\n👋 Scan cancelled by user. Goodbye!")
+    except Exception as e:
+        print(f"\n❌ Unexpected error: {e}")
 
 if __name__ == "__main__":
     main()
