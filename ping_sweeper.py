@@ -4,7 +4,6 @@ Network Ping Sweeper
 A simple tool to discover live hosts on a network range
 
 Author: SomeRandomDev
-Version: 0.2.0
 License: MIT
 """
 
@@ -12,11 +11,17 @@ import subprocess
 import sys
 import time
 import ipaddress
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 class NetworkPingSweeper:
-    def __init__(self, timeout=1):
+    def __init__(self, timeout=1, max_threads=50):
         self.timeout = timeout
+        self.max_threads = max_threads
         self.live_hosts = []
+        self.scanned_hosts = 0
+        self.total_hosts = 0
+        self.lock = threading.Lock()  # For thread-safe operations
         
     def ping_host(self, ip):
         """
@@ -37,8 +42,6 @@ class NetworkPingSweeper:
                 # Linux/macOS: ping -c 1 -W timeout_sec IP
                 cmd = ['ping', '-c', '1', '-W', str(self.timeout), str(ip)]
             
-            print(f"Pinging {ip}...", end=' ')
-            
             # Run ping command and capture result
             result = subprocess.run(
                 cmd, 
@@ -47,20 +50,32 @@ class NetworkPingSweeper:
                 timeout=self.timeout + 1    # Extra second for process overhead
             )
             
+            # Thread-safe counter update
+            with self.lock:
+                self.scanned_hosts += 1
+                progress = (self.scanned_hosts / self.total_hosts) * 100
+            
             # Check if ping was successful (return code 0 = success)
             if result.returncode == 0:
-                print("✅ LIVE")
-                self.live_hosts.append(str(ip))
+                with self.lock:
+                    self.live_hosts.append(str(ip))
+                print(f"[{self.scanned_hosts:3d}/{self.total_hosts}] {ip:15} ✅ LIVE ({progress:5.1f}%)")
                 return True
             else:
-                print("❌ DOWN")
+                print(f"[{self.scanned_hosts:3d}/{self.total_hosts}] {ip:15} ❌ DOWN ({progress:5.1f}%)")
                 return False
                 
         except subprocess.TimeoutExpired:
-            print("⏱️  TIMEOUT")
+            with self.lock:
+                self.scanned_hosts += 1
+                progress = (self.scanned_hosts / self.total_hosts) * 100
+            print(f"[{self.scanned_hosts:3d}/{self.total_hosts}] {ip:15} ⏱️  TIMEOUT ({progress:5.1f}%)")
             return False
         except Exception as e:
-            print(f"❌ ERROR: {e}")
+            with self.lock:
+                self.scanned_hosts += 1
+                progress = (self.scanned_hosts / self.total_hosts) * 100
+            print(f"[{self.scanned_hosts:3d}/{self.total_hosts}] {ip:15} ❌ ERROR: {e} ({progress:5.1f}%)")
             return False
 
     def parse_network_range(self, network_input):
@@ -129,7 +144,7 @@ class NetworkPingSweeper:
 
     def sweep_network(self, network_range):
         """
-        Sweep a network range and find live hosts
+        Sweep a network range and find live hosts using multi-threading
         
         Args:
             network_range (str): Network range to scan
@@ -142,26 +157,38 @@ class NetworkPingSweeper:
             ip_list = self.parse_network_range(network_range)
             
             print(f"\n🔍 Starting ping sweep of {network_range}")
-            print(f"📊 Scanning {len(ip_list)} hosts")
+            print(f"📊 Scanning {len(ip_list)} hosts with {self.max_threads} threads")
             print(f"⏱️  Timeout: {self.timeout} seconds per host")
-            print("-" * 50)
+            print("-" * 70)
             
-            self.live_hosts = []  # Reset live hosts list
+            # Initialize counters
+            self.live_hosts = []
+            self.scanned_hosts = 0
+            self.total_hosts = len(ip_list)
+            
             start_time = time.time()
             
-            # Ping each host in the range (sequentially for now)
-            for i, ip in enumerate(ip_list, 1):
-                print(f"[{i}/{len(ip_list)}] ", end='')
-                self.ping_host(ip)
+            # Use ThreadPoolExecutor for concurrent pings
+            with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
+                # Submit all ping tasks
+                futures = [executor.submit(self.ping_host, ip) for ip in ip_list]
+                
+                # Wait for all tasks to complete
+                for future in futures:
+                    try:
+                        future.result()  # This will raise any exceptions that occurred
+                    except Exception as e:
+                        print(f"❌ Thread error: {e}")
             
             end_time = time.time()
             
             # Results summary
-            print(f"\n" + "=" * 50)
+            print(f"\n" + "=" * 70)
             print(f"🎯 SCAN COMPLETE")
             print(f"⏱️  Time taken: {end_time - start_time:.2f} seconds")
+            print(f"📈 Hosts scanned: {self.scanned_hosts}/{self.total_hosts}")
             print(f"✅ Live hosts found: {len(self.live_hosts)}")
-            print("=" * 50)
+            print("=" * 70)
             
             if self.live_hosts:
                 print(f"\n🌐 LIVE HOSTS:")
@@ -177,6 +204,7 @@ class NetworkPingSweeper:
             return []
         except KeyboardInterrupt:
             print(f"\n\n⚠️  Scan interrupted by user")
+            print(f"📊 Progress: {self.scanned_hosts}/{self.total_hosts} hosts scanned")
             if self.live_hosts:
                 print(f"✅ Live hosts found so far: {len(self.live_hosts)}")
                 for host in sorted(self.live_hosts, key=ipaddress.ip_address):
@@ -185,7 +213,7 @@ class NetworkPingSweeper:
 
 def main():
     """Main entry point for the ping sweeper"""
-    print("🔍 Network Ping Sweeper v0.3.0")
+    print("🔍 Network Ping Sweeper v0.4.0")
     print("⚠️  WARNING: Only use on networks you own or have permission to scan!")
     print()
     
@@ -210,8 +238,21 @@ def main():
         timeout = 1
         print("⚠️  Invalid timeout, using default: 1 second")
     
+    # Get thread count setting
+    try:
+        threads_input = input("Number of threads [50]: ").strip()
+        threads = int(threads_input) if threads_input else 50
+        if threads > 200:
+            print("⚠️  Warning: Too many threads may overwhelm your system")
+            threads = 200
+        elif threads < 1:
+            threads = 1
+    except ValueError:
+        threads = 50
+        print("⚠️  Invalid thread count, using default: 50")
+    
     # Create sweeper and run scan
-    sweeper = NetworkPingSweeper(timeout=timeout)
+    sweeper = NetworkPingSweeper(timeout=timeout, max_threads=threads)
     live_hosts = sweeper.sweep_network(network_range)
     
     print(f"\n🏁 Scan finished. Found {len(live_hosts)} live hosts.")
