@@ -13,6 +13,9 @@ import time
 import ipaddress
 import threading
 import argparse
+import csv
+import json
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 class NetworkPingSweeper:
@@ -23,6 +26,8 @@ class NetworkPingSweeper:
         self.scanned_hosts = 0
         self.total_hosts = 0
         self.lock = threading.Lock()  # For thread-safe operations
+        self.scan_start_time = None
+        self.scan_end_time = None
         
     def ping_host(self, ip):
         """
@@ -167,7 +172,7 @@ class NetworkPingSweeper:
             self.scanned_hosts = 0
             self.total_hosts = len(ip_list)
             
-            start_time = time.time()
+            self.scan_start_time = time.time()
             
             # Use ThreadPoolExecutor for concurrent pings
             with ThreadPoolExecutor(max_workers=self.max_threads) as executor:
@@ -181,12 +186,12 @@ class NetworkPingSweeper:
                     except Exception as e:
                         print(f"❌ Thread error: {e}")
             
-            end_time = time.time()
+            self.scan_end_time = time.time()
             
             # Results summary
             print(f"\n" + "=" * 70)
             print(f"🎯 SCAN COMPLETE")
-            print(f"⏱️  Time taken: {end_time - start_time:.2f} seconds")
+            print(f"⏱️  Time taken: {self.scan_end_time - self.scan_start_time:.2f} seconds")
             print(f"📈 Hosts scanned: {self.scanned_hosts}/{self.total_hosts}")
             print(f"✅ Live hosts found: {len(self.live_hosts)}")
             print("=" * 70)
@@ -204,6 +209,7 @@ class NetworkPingSweeper:
             print(f"❌ Invalid network range: {e}")
             return []
         except KeyboardInterrupt:
+            self.scan_end_time = time.time()
             print(f"\n\n⚠️  Scan interrupted by user")
             print(f"📊 Progress: {self.scanned_hosts}/{self.total_hosts} hosts scanned")
             if self.live_hosts:
@@ -211,6 +217,72 @@ class NetworkPingSweeper:
                 for host in sorted(self.live_hosts, key=ipaddress.ip_address):
                     print(f"   • {host}")
             return self.live_hosts
+
+    def save_results(self, network_range, output_file, file_format='txt'):
+        """
+        Save scan results to a file
+        
+        Args:
+            network_range (str): The network range that was scanned
+            output_file (str): Output file path
+            file_format (str): File format ('txt', 'csv', 'json')
+        """
+        try:
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            scan_time = self.scan_end_time - self.scan_start_time if self.scan_end_time and self.scan_start_time else 0
+            
+            if file_format.lower() == 'csv':
+                with open(output_file, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['Network Range', 'Scan Time', 'Timeout', 'Threads', 'Total Hosts', 'Live Hosts', 'Scan Duration'])
+                    writer.writerow([network_range, timestamp, self.timeout, self.max_threads, self.total_hosts, len(self.live_hosts), f"{scan_time:.2f}s"])
+                    writer.writerow([])  # Empty row
+                    writer.writerow(['Live Host IPs'])
+                    for host in sorted(self.live_hosts, key=ipaddress.ip_address):
+                        writer.writerow([host])
+                        
+            elif file_format.lower() == 'json':
+                data = {
+                    'scan_info': {
+                        'network_range': network_range,
+                        'timestamp': timestamp,
+                        'timeout': self.timeout,
+                        'threads': self.max_threads,
+                        'total_hosts': self.total_hosts,
+                        'live_hosts_count': len(self.live_hosts),
+                        'scan_duration_seconds': round(scan_time, 2)
+                    },
+                    'live_hosts': sorted(self.live_hosts, key=ipaddress.ip_address)
+                }
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2)
+                    
+            else:  # Default to txt format
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    f.write("Network Ping Sweep Results\n")
+                    f.write("=" * 50 + "\n")
+                    f.write(f"Network Range: {network_range}\n")
+                    f.write(f"Scan Time: {timestamp}\n")
+                    f.write(f"Timeout: {self.timeout} seconds\n")
+                    f.write(f"Threads: {self.max_threads}\n")
+                    f.write(f"Total Hosts Scanned: {self.total_hosts}\n")
+                    f.write(f"Live Hosts Found: {len(self.live_hosts)}\n")
+                    f.write(f"Scan Duration: {scan_time:.2f} seconds\n")
+                    f.write("-" * 30 + "\n\n")
+                    
+                    if self.live_hosts:
+                        f.write("Live Host IPs:\n")
+                        for host in sorted(self.live_hosts, key=ipaddress.ip_address):
+                            f.write(f"  • {host}\n")
+                    else:
+                        f.write("No live hosts found.\n")
+            
+            print(f"💾 Results saved to {output_file}")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Error saving results: {e}")
+            return False
 
 def get_network_range():
     """Get network range from user with validation and examples"""
@@ -320,9 +392,39 @@ def get_thread_count():
             print("❌ Please enter a valid number")
             continue
 
+def get_output_settings():
+    """Get output file settings from user"""
+    print("\n💾 SAVE RESULTS:")
+    save_choice = input("Save results to file? (y/n) [n]: ").strip().lower()
+    
+    if save_choice not in ['y', 'yes']:
+        return None, None
+    
+    # Get filename
+    default_filename = f"ping_sweep_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    filename = input(f"Enter filename [{default_filename}]: ").strip()
+    if not filename:
+        filename = default_filename
+    
+    # Get format
+    print("\nFile formats:")
+    print("   1. txt  - Human-readable text (default)")
+    print("   2. csv  - Comma-separated values")
+    print("   3. json - JSON format")
+    
+    format_choice = input("Choose format (1/2/3) [1]: ").strip()
+    format_map = {'1': 'txt', '2': 'csv', '3': 'json'}
+    file_format = format_map.get(format_choice, 'txt')
+    
+    # Ensure correct extension
+    base_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
+    filename = f"{base_name}.{file_format}"
+    
+    return filename, file_format
+
 def run_interactive_mode():
     """Run the tool in interactive mode"""
-    print("🔍 Network Ping Sweeper v0.6.0")
+    print("🔍 Network Ping Sweeper v1.0.0")
     print("=" * 50)
     print("⚠️  IMPORTANT: Only use on networks you own or have explicit permission to scan!")
     print("   Unauthorized network scanning may be illegal in your jurisdiction.")
@@ -333,12 +435,15 @@ def run_interactive_mode():
         network_range = get_network_range()
         timeout = get_timeout()
         threads = get_thread_count()
+        output_file, file_format = get_output_settings()
         
         # Confirm settings before starting
         print(f"\n📋 SCAN CONFIGURATION:")
         print(f"   Network: {network_range}")
         print(f"   Timeout: {timeout} seconds")
         print(f"   Threads: {threads}")
+        if output_file:
+            print(f"   Output: {output_file} ({file_format})")
         print()
         
         input("Press Enter to start scanning... ")
@@ -346,6 +451,10 @@ def run_interactive_mode():
         # Create sweeper and run scan
         sweeper = NetworkPingSweeper(timeout=timeout, max_threads=threads)
         live_hosts = sweeper.sweep_network(network_range)
+        
+        # Save results if requested
+        if output_file and live_hosts:
+            sweeper.save_results(network_range, output_file, file_format)
         
         print(f"\n🏁 Scan finished. Found {len(live_hosts)} live hosts.")
         
@@ -365,7 +474,7 @@ Examples:
   %(prog)s 192.168.1.0/24               # Scan entire subnet
   %(prog)s 192.168.1.1-50               # Scan IP range
   %(prog)s 8.8.8.8                      # Scan single IP
-  %(prog)s 192.168.1.0/24 -t 3 --threads 25  # Custom settings
+  %(prog)s 192.168.1.0/24 -t 3 --threads 25 -o results.txt  # Custom settings with output
         """)
     
     parser.add_argument(
@@ -388,6 +497,11 @@ Examples:
         help='Number of concurrent threads'
     )
     parser.add_argument(
+        '-o', '--output',
+        metavar='FILE',
+        help='Save results to file (format determined by extension: .txt, .csv, .json)'
+    )
+    parser.add_argument(
         '-q', '--quiet',
         action='store_true',
         help='Quiet mode - only show live hosts'
@@ -395,7 +509,7 @@ Examples:
     parser.add_argument(
         '--version',
         action='version',
-        version='Network Ping Sweeper v0.6.0'
+        version='Network Ping Sweeper v1.0.0'
     )
     
     # Parse arguments
@@ -430,6 +544,17 @@ Examples:
     try:
         sweeper = NetworkPingSweeper(timeout=args.timeout, max_threads=args.threads)
         live_hosts = sweeper.sweep_network(args.network)
+        
+        # Save results if output file specified
+        if args.output and live_hosts:
+            # Determine format from file extension
+            file_format = 'txt'
+            if args.output.lower().endswith('.csv'):
+                file_format = 'csv'
+            elif args.output.lower().endswith('.json'):
+                file_format = 'json'
+            
+            sweeper.save_results(args.network, args.output, file_format)
         
         if args.quiet and live_hosts:
             # In quiet mode, just print the live hosts
