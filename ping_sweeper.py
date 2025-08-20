@@ -12,6 +12,7 @@ import sys
 import time
 import ipaddress
 import threading
+import argparse
 from concurrent.futures import ThreadPoolExecutor
 
 class NetworkPingSweeper:
@@ -319,9 +320,9 @@ def get_thread_count():
             print("❌ Please enter a valid number")
             continue
 
-def main():
-    """Main entry point for the ping sweeper with interactive interface"""
-    print("🔍 Network Ping Sweeper v0.5.0")
+def run_interactive_mode():
+    """Run the tool in interactive mode"""
+    print("🔍 Network Ping Sweeper v0.6.0")
     print("=" * 50)
     print("⚠️  IMPORTANT: Only use on networks you own or have explicit permission to scan!")
     print("   Unauthorized network scanning may be illegal in your jurisdiction.")
@@ -352,6 +353,100 @@ def main():
         print(f"\n\n👋 Scan cancelled by user. Goodbye!")
     except Exception as e:
         print(f"\n❌ Unexpected error: {e}")
+
+def main():
+    """Main entry point with command line argument support"""
+    parser = argparse.ArgumentParser(
+        description="Network Ping Sweeper - Discover live hosts on a network",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s                              # Interactive mode
+  %(prog)s 192.168.1.0/24               # Scan entire subnet
+  %(prog)s 192.168.1.1-50               # Scan IP range
+  %(prog)s 8.8.8.8                      # Scan single IP
+  %(prog)s 192.168.1.0/24 -t 3 --threads 25  # Custom settings
+        """)
+    
+    parser.add_argument(
+        'network', 
+        nargs='?',  # Optional positional argument
+        help='Network range to scan (e.g., 192.168.1.0/24, 192.168.1.1-50, 8.8.8.8)'
+    )
+    parser.add_argument(
+        '-t', '--timeout', 
+        type=int, 
+        default=2, 
+        metavar='SECONDS',
+        help='Ping timeout in seconds'
+    )
+    parser.add_argument(
+        '--threads', 
+        type=int, 
+        default=50, 
+        metavar='COUNT',
+        help='Number of concurrent threads'
+    )
+    parser.add_argument(
+        '-q', '--quiet',
+        action='store_true',
+        help='Quiet mode - only show live hosts'
+    )
+    parser.add_argument(
+        '--version',
+        action='version',
+        version='Network Ping Sweeper v0.6.0'
+    )
+    
+    # Parse arguments
+    args = parser.parse_args()
+    
+    # Validate arguments
+    if args.timeout < 1:
+        print("❌ Error: Timeout must be at least 1 second")
+        sys.exit(1)
+    elif args.timeout > 30:
+        print("❌ Error: Timeout cannot exceed 30 seconds")
+        sys.exit(1)
+    
+    if args.threads < 1:
+        print("❌ Error: Thread count must be at least 1")
+        sys.exit(1)
+    elif args.threads > 200:
+        print("❌ Error: Thread count cannot exceed 200")
+        sys.exit(1)
+    
+    # Show warning (unless in quiet mode)
+    if not args.quiet:
+        print("⚠️  WARNING: Only use on networks you own or have explicit permission to scan!")
+        print()
+    
+    # If no network provided, run interactive mode
+    if not args.network:
+        run_interactive_mode()
+        return
+    
+    # Command-line mode
+    try:
+        sweeper = NetworkPingSweeper(timeout=args.timeout, max_threads=args.threads)
+        live_hosts = sweeper.sweep_network(args.network)
+        
+        if args.quiet and live_hosts:
+            # In quiet mode, just print the live hosts
+            for host in sorted(live_hosts, key=ipaddress.ip_address):
+                print(host)
+        elif not args.quiet:
+            print(f"\n🏁 Scan finished. Found {len(live_hosts)} live hosts.")
+        
+        # Exit code: 0 if hosts found, 1 if none found
+        sys.exit(0 if live_hosts else 1)
+        
+    except KeyboardInterrupt:
+        print(f"\n\n⚠️  Scan interrupted by user")
+        sys.exit(130)  # Standard exit code for SIGINT
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
